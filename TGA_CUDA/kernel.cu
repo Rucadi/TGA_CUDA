@@ -8,6 +8,9 @@
 #include <stdio.h>
 using namespace cv;
 
+cudaEvent_t cStart, cEnd;
+#define CUDA_TIME_START() {cudaEventCreate(&CEVENT); cudaEventCreate(&cEnd)}
+#define CUDA_TIME_GET(_ms) {cudaEventSynchronize(cEnd); cudaEventElapsedTime(&_ms,cStart, cEnd); }
 clock_t tBegin;
 #define TIME_START() { tBegin = clock();}
 #define TIME_GET() {(double)(clock() - tBegin)/CLOCKS_PER_SEC;}
