@@ -4,13 +4,13 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <time.h>
-
+#include <iostream>
 #include <stdio.h>
 using namespace cv;
 
 cudaEvent_t cStart, cEnd;
-#define CUDA_TIME_START() {cudaEventCreate(&CEVENT); cudaEventCreate(&cEnd)}
-#define CUDA_TIME_GET(_ms) {cudaEventSynchronize(cEnd); cudaEventElapsedTime(&_ms,cStart, cEnd); }
+#define CUDA_TIME_START() cudaEventCreate(&cStart); cudaEventCreate(&cEnd); cudaEventRecord(cStart);
+#define CUDA_TIME_GET(_ms) cudaEventRecord(cEnd); cudaEventSynchronize(cEnd); cudaEventElapsedTime(&_ms,cStart, cEnd);
 clock_t tBegin;
 #define TIME_START() { tBegin = clock();}
 #define TIME_GET() {(double)(clock() - tBegin)/CLOCKS_PER_SEC;}
@@ -143,7 +143,12 @@ void mycuda()
 	dim3 dimBlock(32, 32);
 	dim3 dimGrid(16, 16);
 
+	float milis;
+	CUDA_TIME_START();
 	sobel<<<dimGrid, dimBlock >>> (d_input, d_output, cvGetSize(image).height);
+	CUDA_TIME_GET(milis);
+
+	std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
 
 
