@@ -3,8 +3,14 @@
 #include "device_launch_parameters.h"
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
+#include <time.h>
+
 #include <stdio.h>
 using namespace cv;
+
+clock_t tBegin;
+#define TIME_START() { tBegin = clock();}
+#define TIME_GET() {(double)(clock() - tBegin)/CLOCKS_PER_SEC;}
 
 #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
 #define pb(bte){printf("%d\n",(bte));}
@@ -57,6 +63,8 @@ __global__ void sobel(unsigned char* imgray, unsigned char* out, int SIZE)
 
 void CPUSobel(unsigned char* imgray, unsigned char* out, int SIZE)
 {
+
+
 	for (int x = 1; x<512; ++x)
 		for (int y = 0; y < 511; ++y)
 		{
@@ -74,6 +82,12 @@ void CPUSobel(unsigned char* imgray, unsigned char* out, int SIZE)
 			tot = (tot>60) ? 255 : 0;
 			out[x * SIZE + y] = tot;
 		}
+
+}
+
+void CPUAscii(unsigned char* imbw, unsigned char * out, int XSIZE, int YSIZE, int IMSIZE)
+{
+
 
 }
 void serial()
@@ -122,6 +136,7 @@ void mycuda()
 	//copiamos el input al device
 	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
 
+	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
 	dim3 dimBlock(32, 32);
 	dim3 dimGrid(16, 16);
 
