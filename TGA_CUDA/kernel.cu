@@ -6,6 +6,15 @@
 #include <time.h>
 #include <iostream>
 #include <stdio.h>
+#include <device_functions.h>
+#include <iostream>
+
+#ifndef __CUDACC__  
+#define __CUDACC__
+#endif
+
+const unsigned int bSize = 32;
+
 using namespace cv;
 
 cudaEvent_t cStart, cEnd;
@@ -64,6 +73,44 @@ __global__ void sobel(unsigned char* imgray, unsigned char* out, int SIZE)
 }
 
 
+__global__ void sobelBlocks(unsigned char* imgray, unsigned char* out, int SIZE)
+{
+
+	int x = blockDim.x*blockIdx.x + threadIdx.x;
+	int y = blockDim.y*blockIdx.y + threadIdx.y;
+	
+	int tx = threadIdx.x;
+	int ty = threadIdx.y;
+
+	__shared__ unsigned char sA[(bSize)*(bSize)];
+
+	sA[tx*bSize + ty] = imgray[x*SIZE + y];
+	
+	__syncthreads();
+	
+	int tot;
+
+	if (tx > 0 && ty > 0 && tx < bSize-1 && ty < bSize-1) {
+		unsigned char pixel00 = sA[(tx - 1) * bSize + ty - 1];
+		unsigned char pixel01 = sA[(tx - 1) * bSize + ty];
+		unsigned char pixel02 = sA[(tx - 1) * bSize + ty + 1];
+		unsigned char pixel10 = sA[(tx)*      bSize + ty - 1];
+		unsigned char pixel12 = sA[(tx)*      bSize + ty + 1];
+		unsigned char pixel20 = sA[(tx + 1) * bSize + ty - 1];
+		unsigned char pixel21 = sA[(tx + 1) * bSize + ty];
+		unsigned char pixel22 = sA[(tx + 1) * bSize + ty + 1];
+
+		int vert = (pixel00 + 2 * pixel01 + pixel02) - (pixel20 + 2 * pixel21 + pixel22);
+		int hori = (pixel00 + 2 * pixel10 + pixel20) - (pixel02 + 2 * pixel12 + pixel22);
+		tot = vert + hori;
+		tot = (tot > 60) ? 255 : 0;
+
+	}
+
+	__syncthreads();
+	out[x * SIZE + y] = tot;
+	
+}
 void CPUSobel(unsigned char* imgray, unsigned char* out, int SIZE)
 {
 
@@ -105,6 +152,8 @@ void serial()
 	unsigned char *input = (unsigned char*)image->imageData;
 
 	CPUSobel(input, output, cvGetSize(image).height);
+
+	CPUSobel(input, output, cvGetSize(image).height);
 	cvShowImage("Image", h_image2);
   cvWaitKey();
 }
@@ -140,12 +189,14 @@ void mycuda()
 	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
 
 	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
-	dim3 dimBlock(32, 32);
-	dim3 dimGrid(16, 16);
+	dim3 dimBlock(32 , 32);
+	dim3 dimGrid(16 ,16);
+
 
 	float milis;
 	CUDA_TIME_START();
-	sobel<<<dimGrid, dimBlock >>> (d_input, d_output, cvGetSize(image).height);
+
+	sobelBlocks<<<dimGrid, dimBlock >>> (d_input, d_output, cvGetSize(image).height);
 	CUDA_TIME_GET(milis);
 
 	std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
