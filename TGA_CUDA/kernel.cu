@@ -73,6 +73,15 @@ __global__ void sobel(unsigned char* imgray, unsigned char* out, int SIZE)
 }
 
 
+/*La shared memory es a nivel de bloque*/
+/*Kernel  = Conjunto de bloques
+Block =  Conjunto de threads
+ 
+ 
+16*16 grid	256 grids
+32*32 bloques	1024 bloques
+(en total… 512*512…)
+*/
 __global__ void sobelBlocks(unsigned char* imgray, unsigned char* out, int SIZE)
 {
 
@@ -82,14 +91,16 @@ __global__ void sobelBlocks(unsigned char* imgray, unsigned char* out, int SIZE)
 	int tx = threadIdx.x;
 	int ty = threadIdx.y;
 
-	__shared__ unsigned char sA[(bSize)*(bSize)];
+	__shared__ unsigned char sA[(bSize)*(bSize)];//creamos array que contiene toda la imagen, todos los threads participan al crearlo
 
 	sA[tx*bSize + ty] = imgray[x*SIZE + y];
 	
-	__syncthreads();
+	__syncthreads();//ahora esperamos para que todos tengan una versión de la matriz en shared
 	
 	int tot;
 
+	//boundary check? evitar que esté fuera del bloque?
+	
 	if (tx > 0 && ty > 0 && tx < bSize-1 && ty < bSize-1) {
 		unsigned char pixel00 = sA[(tx - 1) * bSize + ty - 1];
 		unsigned char pixel01 = sA[(tx - 1) * bSize + ty];
@@ -135,8 +146,80 @@ void CPUSobel(unsigned char* imgray, unsigned char* out, int SIZE)
 
 }
 
-void CPUAscii(unsigned char* imbw, unsigned char * out, int XSIZE, int YSIZE, int IMSIZE)
+unsigned char convertTable(unsigned char value)
 {
+	unsigned char asciival;
+
+	if (value >= 230)
+	{
+		asciival = '@';
+	}
+	else if (value >= 200)
+	{
+		asciival = '#';
+	}
+	else if (value >= 180)
+	{
+		asciival = '8';
+	}
+	else if (value >= 160)
+	{
+		asciival = '&';
+	}
+	else if (value >= 130)
+	{
+		asciival = 'o';
+	}
+	else if (value >= 100)
+	{
+		asciival = ':';
+	}
+	else if (value >= 70)
+	{
+		asciival = '*';
+	}
+	else if (value >= 50)
+	{
+		asciival = '.';
+	}
+	else
+	{
+		asciival = ' ';
+	}
+
+	return asciival;
+}
+
+void CPUAscii(unsigned char* imgray, unsigned char* out, int SIZE, int cols, int rows)
+{
+	int  pixels_y = SIZE / cols;
+	int pixels_x = SIZE / rows;
+	unsigned char* ascii = (unsigned char*) malloc(rows*cols);
+	volatile int eol = 0;
+
+	for (int x = 0; x < rows; x++ )
+	{
+		for (int y = 0; y < cols; y++)
+		{
+
+			int sumt = 0;
+			int dval = 0;
+			for (int i = x*pixels_x; i < x + pixels_x; ++i)
+			{
+				for (int j = y*pixels_y; j < y + pixels_y; ++j)
+				{
+					++dval;
+					sumt += imgray[i*SIZE + j];
+				}
+			}
+
+			int media = sumt / dval;
+			ascii[x*rows+y] = convertTable(media);
+		}
+	}
+
+	printf((char*)ascii);
+	printf("\n");
 
 
 }
