@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <device_functions.h>
 #include <iostream>
-
+#include <Windows.h>
 #ifndef __CUDACC__  
 #define __CUDACC__
 #endif
@@ -190,10 +190,20 @@ unsigned char convertTable(unsigned char value)
 	return asciival;
 }
 
-void CPUAscii(unsigned char* imgray, unsigned char* out, int SIZE, int cols, int rows)
+void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 {
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+
+	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+	cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+	rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+
+
+
+
 	int  pixels_y = SIZE / cols;
 	int pixels_x = SIZE / rows;
+	printf("Cols:%d Rows:%d", cols, rows);
 	unsigned char* ascii = (unsigned char*) malloc(rows*cols);
 	volatile int eol = 0;
 
@@ -203,18 +213,23 @@ void CPUAscii(unsigned char* imgray, unsigned char* out, int SIZE, int cols, int
 		{
 
 			int sumt = 0;
-			int dval = 0;
-			for (int i = x*pixels_x; i < x + pixels_x; ++i)
+			int dval = 1;
+			for (int i = x*pixels_x; i < x*pixels_x + pixels_x; ++i)
 			{
-				for (int j = y*pixels_y; j < y + pixels_y; ++j)
+				for (int j = y*pixels_y; j < y*pixels_y +  pixels_y; ++j)
 				{
 					++dval;
 					sumt += imgray[i*SIZE + j];
+
+					// printf("i:%d j:%d\n", i, j);
 				}
 			}
-
+		//	printf("Val:%f\n", sumt / dval);
+			if (dval == 0) dval = 1;
 			int media = sumt / dval;
-			ascii[x*rows+y] = convertTable(media);
+
+			printf("i:%d j:%d\n", x, y);
+			ascii[x*cols+y] = convertTable(media);
 		}
 	}
 
@@ -241,7 +256,22 @@ void serial()
   cvWaitKey();
 }
 
+void ASCII()
+{
+	IplImage* image;
+	image = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
 
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+
+	CPUSobel(input, output, cvGetSize(image).height);
+	CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 207, 61);
+	cvShowImage("Image", h_image2);
+	cvWaitKey();
+}
 void mycuda()
 {
 	IplImage* image;
@@ -300,7 +330,8 @@ int main()
 {
 	
 	//serial();
-	mycuda();
+	ASCII();
+	//mycuda();
 	return 0;
 }
 
