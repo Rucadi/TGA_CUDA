@@ -82,46 +82,136 @@ Block =  Conjunto de threads
 32*32 bloques	1024 bloques
 (en total… 512*512…)
 */
+
 __global__ void sobelBlocks(unsigned char* imgray, unsigned char* out, int SIZE)
 {
 
 	int x = blockDim.x*blockIdx.x + threadIdx.x;
 	int y = blockDim.y*blockIdx.y + threadIdx.y;
-	
+
 	int tx = threadIdx.x;
 	int ty = threadIdx.y;
 
-	__shared__ unsigned char sA[(bSize)*(bSize)];//creamos array que contiene toda la imagen, todos los threads participan al crearlo
-
-	sA[tx*bSize + ty] = imgray[x*SIZE + y];
-	
+	int sizeShared = bSize + 2;
+	//__shared__ unsigned char sA[(bSize + 2)*(bSize + 2)];//creamos array que contiene toda la imagen, todos los threads participan al crearlo
+	__shared__ unsigned char sA[(bSize + 2)][(bSize + 2)];
+	sA[(tx + 1)][(ty + 1)] = imgray[x*SIZE + y];
+	if (ty == 0) // primera columna
+	{
+		//calcular todos los pixels x-1
+		sA[tx+1][0] = imgray[(x - 1)*SIZE+y]; 
+		if(tx==0) sA[0][0] = imgray[(x-1)*SIZE+y-1];//cargar arriba izquierda
+	}
+	if (ty == 31) //ultima columna
+	{
+		sA[tx + 1][33] = imgray[(x + 1)*SIZE+y];
+		if(tx==31) sA[33][33] = imgray[(x + 1)*SIZE+ y+1];//cargar abajo derecha
+	}
+	if (tx == 0)// primera fila
+	{
+		sA[0][ty+1] = imgray[(x)*SIZE + y - 1];
+		if(ty==31) sA[0][33] = imgray[(x+1)*SIZE+y -1];//cargar arriba derecha
+	}
+	if (tx == 31) //ultima fila
+	{
+		sA[33][ty+1] = imgray[(x)*SIZE + y + 1];
+		if(ty==0) sA[33][0] = imgray[(x - 1)*SIZE+y + 1];//cargar abajo izquierda
+	}
 	__syncthreads();//ahora esperamos para que todos tengan una versión de la matriz en shared
-	
+
 	int tot;
 
 	//boundary check? evitar que esté fuera del bloque?
-	
-	if (tx > 0 && ty > 0 && tx < bSize-1 && ty < bSize-1) {
-		unsigned char pixel00 = sA[(tx - 1) * bSize + ty - 1];
-		unsigned char pixel01 = sA[(tx - 1) * bSize + ty];
-		unsigned char pixel02 = sA[(tx - 1) * bSize + ty + 1];
-		unsigned char pixel10 = sA[(tx)*      bSize + ty - 1];
-		unsigned char pixel12 = sA[(tx)*      bSize + ty + 1];
-		unsigned char pixel20 = sA[(tx + 1) * bSize + ty - 1];
-		unsigned char pixel21 = sA[(tx + 1) * bSize + ty];
-		unsigned char pixel22 = sA[(tx + 1) * bSize + ty + 1];
 
-		int vert = (pixel00 + 2 * pixel01 + pixel02) - (pixel20 + 2 * pixel21 + pixel22);
-		int hori = (pixel00 + 2 * pixel10 + pixel20) - (pixel02 + 2 * pixel12 + pixel22);
-		tot = vert + hori;
-		tot = (tot > 60) ? 255 : 0;
+	int ntx = tx + 1;
+	int nty = ty + 1;
 
-	}
+	unsigned char pixel00 = sA[(ntx - 1)][nty - 1];
+	unsigned char pixel01 = sA[(ntx - 1)][ nty];
+	unsigned char pixel02 = sA[(ntx - 1)][nty + 1];
+	unsigned char pixel10 = sA[(ntx)][nty - 1];
+	unsigned char pixel12 = sA[(ntx)]	[nty + 1];
+	unsigned char pixel20 = sA[(ntx + 1)][nty - 1];
+	unsigned char pixel21 = sA[(ntx + 1)][+ nty];
+	unsigned char pixel22 = sA[(ntx + 1)][nty + 1];
+
+	int vert = (pixel00 + 2 * pixel01 + pixel02) - (pixel20 + 2 * pixel21 + pixel22);
+	int hori = (pixel00 + 2 * pixel10 + pixel20) - (pixel02 + 2 * pixel12 + pixel22);
+	tot = vert + hori;
+	tot = (tot > 60) ? 255 : 0;
+
 
 	__syncthreads();
 	out[x * SIZE + y] = tot;
+
+}
+
+
+__global__ void asciiBlocks(unsigned char* imgray, unsigned char* out, int SIZEX, int bSizex, int bSizey) {
+
+		int x = blockDim.x*blockIdx.x + threadIdx.x;
+		int y = blockDim.y*blockIdx.y + threadIdx.y;
+
+		int sum = 0;
+		for (int i = x*bSizex; i < x*bSizex+bSizex; i++)
+			for (int j = y*bSizey; j < y*bSizey+bSizey; j++)
+				sum = sum + imgray[j*SIZEX+i];
+		
+		/*
+		__shared__ int sum;
+		sum = 0;
+		__syncthreads();
+
+		sum = sum + imgray[y*SIZEX + x];
+
+		__syncthreads();
+		*/
+		sum = sum / (bSizex*bSizey);
+		unsigned char asciival = 'a';
+		unsigned char value = sum;
+		
+		if (value >= 230)
+		{
+			asciival = '@';
+		}
+		else if (value >= 200)
+		{
+			asciival = '#';
+		}
+		else if (value >= 180)
+		{
+			asciival = '8';
+		}
+		else if (value >= 160)
+		{
+			asciival = '&';
+		}
+		else if (value >= 130)
+		{
+			asciival = 'o';
+		}
+		else if (value >= 100)
+		{
+			asciival = ':';
+		}
+		else if (value >= 70)
+		{
+			asciival = '*';
+		}
+		else if (value >= 50)
+		{
+			asciival = '.';
+		}
+		else
+		{
+			asciival = ' ';
+		}
+
+		int outSizex = SIZEX / bSizex;
+		out[y*outSizex + x] = asciival;
 	
 }
+
 void CPUSobel(unsigned char* imgray, unsigned char* out, int SIZE)
 {
 
@@ -190,6 +280,8 @@ unsigned char convertTable(unsigned char value)
 	return asciival;
 }
 
+
+
 void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 {
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -198,12 +290,10 @@ void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 	cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
 	rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
 
-
-
-
 	int  pixels_y = SIZE / cols;
 	int pixels_x = SIZE / rows;
-	printf("Cols:%d Rows:%d", cols, rows);
+
+	//printf("Cols:%d Rows:%d", cols, rows);
 	unsigned char* ascii = (unsigned char*) malloc(rows*cols);
 	volatile int eol = 0;
 
@@ -228,7 +318,7 @@ void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 			if (dval == 0) dval = 1;
 			int media = sumt / dval;
 
-			printf("i:%d j:%d\n", x, y);
+			//printf("i:%d j:%d\n", x, y);
 			ascii[x*cols+y] = convertTable(media);
 		}
 	}
@@ -269,9 +359,87 @@ void ASCII()
 
 	CPUSobel(input, output, cvGetSize(image).height);
 	CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 207, 61);
+
 	cvShowImage("Image", h_image2);
 	cvWaitKey();
 }
+
+
+
+void cudaASCII() {
+	IplImage* image;
+	image = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+
+	CPUSobel(input, output, cvGetSize(image).height);
+
+
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+
+	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+	int cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+	int rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+
+	unsigned char *ascii = (unsigned char*) malloc(rows*cols);
+
+	int SIZE = cvGetSize(image).height;
+
+	int pixels_x = SIZE / rows; // character sizeX
+	int pixels_y = SIZE / cols; //character sizeY
+	int asciisize = rows*cols;
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	cudaMalloc((unsigned char**)&d_input, imgsize);
+	cudaMalloc((unsigned char**)&d_output, asciisize);
+
+	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
+
+	//thread x block GRID
+	int x, y;
+	x = y = 2;
+	while (x < rows)
+		x *= 2;
+	while (y < cols)
+		y *= 2;
+
+	//thread x block GRID
+	dim3 dimBlock(1,1);
+	dim3 dimGrid(rows, cols);
+
+	//thread x pixel GRID
+	//dim3 dimBlock(32, 32);
+
+	float milis;
+	CUDA_TIME_START();
+
+	asciiBlocks<<<dimGrid, dimBlock >>> (d_input, d_output, cvGetSize(image).height, pixels_x, pixels_y);
+	CUDA_TIME_GET(milis);
+
+	std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
+	CudaCheckError();
+
+
+	//obtener los datos de la gráfica
+
+	cudaMemcpy(ascii, d_output,  asciisize, cudaMemcpyDeviceToHost);
+	cudaFree(d_output);
+	cudaFree(d_input);
+
+	//for (int i = 0; i < asciisize; i++)
+		//std::cout << std::hex << (int)ascii[i];
+	printf((char*)ascii);
+	printf("\n");
+	printf("hello");
+	cvShowImage("Image", h_image2);
+	cvWaitKey();
+}
+
 void mycuda()
 {
 	IplImage* image;
@@ -312,7 +480,7 @@ void mycuda()
 	sobelBlocks<<<dimGrid, dimBlock >>> (d_input, d_output, cvGetSize(image).height);
 	CUDA_TIME_GET(milis);
 
-	std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
+	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
 
 
@@ -321,8 +489,8 @@ void mycuda()
 	cudaFree(d_output);
 	cudaFree(d_input);
 	//mostrar imagen
-	cvShowImage("Image", h_image2);
 
+	cvShowImage("Image", h_image2);
 	cvWaitKey();
 
 }
@@ -330,8 +498,9 @@ int main()
 {
 	
 	//serial();
-	ASCII();
-	//mycuda();
+	//ASCII();
+	//cudaASCII();
+	mycuda();
 	return 0;
 }
 
