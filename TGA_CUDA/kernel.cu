@@ -148,24 +148,52 @@ __global__ void sobelBlocks(unsigned char* imgray, unsigned char* out, int SIZE)
 
 
 __global__ void asciiBlocks(unsigned char* imgray, unsigned char* out, int SIZEX, int bSizex, int bSizey) {
-
+	
 		int x = blockDim.x*blockIdx.x + threadIdx.x;
 		int y = blockDim.y*blockIdx.y + threadIdx.y;
-
+		int tx = threadIdx.x;
+		int ty = threadIdx.y;
 		int sum = 0;
+		/*
 		for (int i = x*bSizex; i < x*bSizex+bSizex; i++)
 			for (int j = y*bSizey; j < y*bSizey+bSizey; j++)
 				sum = sum + imgray[j*SIZEX+i];
 		
-		/*
-		__shared__ int sum;
-		sum = 0;
-		__syncthreads();
-
-		sum = sum + imgray[y*SIZEX + x];
-
-		__syncthreads();
 		*/
+		__shared__ unsigned char sdata[8192];
+		int tid = ty*SIZEX + tx;
+
+		unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
+		sdata[tid] = imgray[y*SIZEX+x];
+
+		__syncthreads();
+
+		// contiguous range pattern
+		for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+			if (threadIdx.x < offset) {
+				// add a partial sum upstream to our own
+				sdata[threadIdx.x] += sdata[threadIdx.x + offset];
+			}
+			// wait until all threads in the block have
+			// updated their partial sums
+			__syncthreads();
+		}
+
+		// thread 0 writes the final result
+		if (threadIdx.x == 0) {
+			per_block_results[blockIdx.x] = sdata[0];
+		}
+
+
+		//sdata[tid] = g_imgray[i];
+		__syncthreads();
+
+
+
+	
+
+		__syncthreads();
+		
 		sum = sum / (bSizex*bSizey);
 		unsigned char asciival = 'a';
 		unsigned char value = sum;
@@ -384,7 +412,8 @@ void cudaASCII() {
 	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
 	int cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
 	int rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-
+	int a; std::cin >> a;
+	std::cout << cols << " g "  << rows;
 	unsigned char *ascii = (unsigned char*) malloc(rows*cols);
 
 	int SIZE = cvGetSize(image).height;
@@ -409,7 +438,7 @@ void cudaASCII() {
 		y *= 2;
 
 	//thread x block GRID
-	dim3 dimBlock(1,1);
+	dim3 dimBlock(pixels_x,pixels_y);
 	dim3 dimGrid(rows, cols);
 
 	//thread x pixel GRID
@@ -471,7 +500,7 @@ void mycuda()
 
 	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
 	dim3 dimBlock(32 , 32);
-	dim3 dimGrid(16 ,16);
+	dim3 dimGrid(16,16);
 
 
 	float milis;
@@ -499,8 +528,8 @@ int main()
 	
 	//serial();
 	//ASCII();
-	//cudaASCII();
-	mycuda();
+	cudaASCII();
+	//mycuda();
 	return 0;
 }
 
