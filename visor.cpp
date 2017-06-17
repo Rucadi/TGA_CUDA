@@ -9,31 +9,27 @@ clock_t tBegin;
 #define TIME_GET() (double)(clock() - tBegin)/(CLOCKS_PER_SEC/1000)
 
 
-int col_x;
-int col_y;
-int frames;
-int fps;
-int width, height;
+int col_x = 128;
+int col_y = 32;
+int fps = 24;
 
 int main()
 {
   
- cin>>col_x>>col_y>>frames>>fps>>width>>height;
-  char* frame = (char*)malloc(col_x*col_y);
-  char  		buff[] = "\e[8;509;100t";
-  sprintf(buff,"\e[8;%d;%dt",width,height);
-  cout << buff;
+  //128x32
   
+  char* frame = (char*)malloc(col_x*col_y+2);
   TIME_START();
   long long int frametime =  1000/fps;	
-  while(frames--)
+  while(1)
   {
 	  
-	    fread(frame, sizeof(char), col_x*col_y, stdin);
+	    if(fread(frame, sizeof(char), col_x*col_y+2, stdin)<0) return 0;
 		while(TIME_GET()<frametime);//Mientras no haya pasado el tiempo suficiente esperamos)
-		write(1,frame,col_x*col_y);
-	    //for(int i=0;i<10;++i) cout<<frame[i]<<endl; 	
-		fflush(stdout);
+		for(int i=0;i<col_y;++i)
+		{
+			write(1,frame,col_x); printf("\n");
+		}
 		TIME_START();
   }
 

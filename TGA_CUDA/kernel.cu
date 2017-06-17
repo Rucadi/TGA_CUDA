@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <device_functions.h>
 #include <iostream>
+#include <string.h>
 #ifndef __CUDACC__  
 #define __CUDACC__
 #endif
@@ -22,7 +23,7 @@ cudaEvent_t cStart, cEnd;
 #define CUDA_TIME_GET(_ms) cudaEventRecord(cEnd); cudaEventSynchronize(cEnd); cudaEventElapsedTime(&_ms,cStart, cEnd);
 clock_t tBegin;
 #define TIME_START() { tBegin = clock();}
-#define TIME_GET() {(double)(clock() - tBegin)/CLOCKS_PER_SEC;}
+#define TIME_GET() (double)(clock() - tBegin)/(CLOCKS_PER_SEC/1000);
 
 #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
 #define pb(bte){printf("%d\n",(bte));}
@@ -151,8 +152,7 @@ __global__ void sobelBlocks_4(unsigned char* imgray, unsigned char* out, int SIZ
 	int y = blockDim.y*blockIdx.y + threadIdx.y;
 	int tx = threadIdx.x * 4;
 	int ty = threadIdx.y;
-	//printf("BlockX=%d", blockDim.x);
-	//printf("tx=%d, ty=%d, x=%d, y=%d \n", tx, ty, x, y);
+	
 	__shared__ unsigned char sA[(bSize + 2)][(bSize + 2)];
 
 	sA[(ty + 1)][(tx + 1)] = imgray[y*SIZE + x];
@@ -432,9 +432,9 @@ void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 
 	int  pixels_y = SIZE / cols;
 	int pixels_x = SIZE / rows;
-	printf("pixelx=%d, pixely=%d SIZE=%d ", pixels_x, pixels_y, SIZE);
+	//printf("pixelx=%d, pixely=%d SIZE=%d ", pixels_x, pixels_y, SIZE);
 	//printf("Cols:%d Rows:%d", cols, rows);
-	unsigned char* ascii = (unsigned char*)malloc(rows*cols);
+	unsigned char* ascii = (unsigned char*)malloc(rows*cols+1);
 	volatile int eol = 0;
 
 		for (int x = 0; x < rows; x++)
@@ -450,27 +450,25 @@ void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 					{
 						++dval;
 						sumt += imgray[i*SIZE + j];
-						//printf("Val:%f\n", sumt );
-						// printf("i:%d j:%d\n", i, j);
 					}
 				}
 					
 				if (dval == 0) dval = 1;
 				int media = sumt / dval;
-
-				//printf("i:%d j:%d\n", x, y);
 				ascii[x*cols + y] = convertTable(media);
 			}
 		}
 	
-
+		ascii[rows*cols] = 0;
 	printf((char*)ascii);
-	printf("\n");
+	printf("\n\n");
 
 
 }
-void serial()
+float serial()
 {
+	
+	
 	IplImage* image;
 	image = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
 	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
@@ -479,12 +477,9 @@ void serial()
 
 	unsigned char *output = (unsigned char*)h_image2->imageData;
 	unsigned char *input = (unsigned char*)image->imageData;
-
+	TIME_START();
 	CPUSobel(input, output, cvGetSize(image).height);
-
-	CPUSobel(input, output, cvGetSize(image).height);
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
+	return TIME_GET();
 }
 void ASCII()
 {
@@ -579,6 +574,7 @@ void cudaASCII() {
 	cvWaitKey();
 }
 
+
 void mycuda()
 {
 	IplImage* image;
@@ -634,8 +630,11 @@ void mycuda()
 
 }
 
+/*	namedWindow("Image", WINDOW_NORMAL);
+	cvShowImage("Image", h_image2);
+	cvWaitKey();*/
 
-void cuda128()
+float cuda128()
 {
 	IplImage* src;
 
@@ -683,12 +682,9 @@ void cuda128()
 	cudaFree(d_output);
 	cudaFree(d_input);
 	//mostrar imagen
-
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
-
+	return milis;
 }
-void cuda128_4()
+float cuda128_4()
 {
 	IplImage* src;
 
@@ -736,12 +732,10 @@ void cuda128_4()
 	cudaFree(d_output);
 	cudaFree(d_input);
 	//mostrar imagen
-
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
+	return milis;
 
 }
-void cuda512()
+float cuda512()
 {
 	IplImage* src;
 
@@ -790,11 +784,11 @@ void cuda512()
 	cudaFree(d_input);
 	//mostrar imagen
 
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
+	return milis;
+
 
 }
-void cuda512_4()
+float cuda512_4()
 {
 	IplImage* src;
 
@@ -844,243 +838,292 @@ void cuda512_4()
 	//mostrar imagen
 
 	//cvShowImage("Image", h_image2);
-	CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 207, 61);
-	scanf("%f", milis);
-	//cvWaitKey();
-
-}
-void cuda3072()
-{
-	IplImage* src;
-
-	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
-
-
-	IplImage *image = cvCreateImage(cvSize(3072, 3072), src->depth, src->nChannels);
-
-
-	cvResize(src, image);
-
-	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-
-	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
-	unsigned char *output = (unsigned char*)h_image2->imageData;
-	unsigned char *input = (unsigned char*)image->imageData;
-	unsigned char *d_input;
-	unsigned char *d_output;
-
-	//reservamos espacio en la tg para nuestras imagenes
-	cudaMalloc((unsigned char**)&d_input, imgsize);
-	cudaMalloc((unsigned char**)&d_output, imgsize);
-
-
-	//copiamos el input al device
-	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
-
-	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
-	dim3 dimBlock(32, 32);
-	dim3 dimGrid(96, 96);
-
-	float milis;
-	CUDA_TIME_START();
-
-	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-
-	CUDA_TIME_GET(milis);
-
-	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
-	CudaCheckError();
-
-
-	//obtener los datos de la gráfica
-	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
-	cudaFree(d_output);
-	cudaFree(d_input);
-	//mostrar imagen
-	namedWindow("Image", WINDOW_NORMAL);
-
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
-
-}
-void cuda3072_4()
-{
-	IplImage* src;
-
-	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
-
-
-	IplImage *image = cvCreateImage(cvSize(3072, 3072), src->depth, src->nChannels);
-
-
-	cvResize(src, image);
-
-	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-
-	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
-	unsigned char *output = (unsigned char*)h_image2->imageData;
-	unsigned char *input = (unsigned char*)image->imageData;
-	unsigned char *d_input;
-	unsigned char *d_output;
-
-	//reservamos espacio en la tg para nuestras imagenes
-	cudaMalloc((unsigned char**)&d_input, imgsize);
-	cudaMalloc((unsigned char**)&d_output, imgsize);
-
-
-	//copiamos el input al device
-	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
-
-	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
-	dim3 dimBlock(8, 32);
-	dim3 dimGrid(96, 96);
-
-	float milis;
-	CUDA_TIME_START();
-
-	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-
-	CUDA_TIME_GET(milis);
-
-	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
-	CudaCheckError();
-
-
-	//obtener los datos de la gráfica
-	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
-	cudaFree(d_output);
-	cudaFree(d_input);
-	//mostrar imagen
-	namedWindow("Image", WINDOW_NORMAL);
-
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
-
-}
-void cuda4096()
-{
-	IplImage* src;
-
-	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
-
-
-	IplImage *image = cvCreateImage(cvSize(4096, 4096), src->depth, src->nChannels);
-
-
-	cvResize(src, image);
-
-	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-
-	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
-	unsigned char *output = (unsigned char*)h_image2->imageData;
-	unsigned char *input = (unsigned char*)image->imageData;
-	unsigned char *d_input;
-	unsigned char *d_output;
-
-	//reservamos espacio en la tg para nuestras imagenes
-	cudaMalloc((unsigned char**)&d_input, imgsize);
-	cudaMalloc((unsigned char**)&d_output, imgsize);
-
-
-	//copiamos el input al device
-	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
-
-	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
-	dim3 dimBlock(32, 32);
-	dim3 dimGrid(128, 128);
-
-	float milis;
-	CUDA_TIME_START();
-
-	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
-
-	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
-	CudaCheckError();
-
-
-	//obtener los datos de la gráfica
-	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
-	cudaFree(d_output);
-	cudaFree(d_input);
-	//mostrar imagen
-	namedWindow("Image", WINDOW_NORMAL);
-
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
-
-}
-void cuda4096_4()
-{
-	IplImage* src;
-
-	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
-
-
-	IplImage *image = cvCreateImage(cvSize(4096, 4096), src->depth, src->nChannels);
-
-
-	cvResize(src, image);
-
-	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-
-	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
-	unsigned char *output = (unsigned char*)h_image2->imageData;
-	unsigned char *input = (unsigned char*)image->imageData;
-	unsigned char *d_input;
-	unsigned char *d_output;
-
-	//reservamos espacio en la tg para nuestras imagenes
-	cudaMalloc((unsigned char**)&d_input, imgsize);
-	cudaMalloc((unsigned char**)&d_output, imgsize);
-
-
-	//copiamos el input al device
-	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
-
-	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
-	dim3 dimBlock(8, 32);
-	dim3 dimGrid(128, 128);
-
-	float milis;
-	CUDA_TIME_START();
-
-	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
-	//printf("milis = %f", milis);
-	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
-	CudaCheckError();
-
-
-	//obtener los datos de la gráfica
-	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
-	cudaFree(d_output);
-	cudaFree(d_input);
-	//mostrar imagen
-	namedWindow("Image", WINDOW_NORMAL);
-	cvShowImage("Image", h_image2);
 	//CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 207, 61);
-	cvWaitKey();
+	//cvWaitKey();
+	return milis;
+
+}
+float cuda3072()
+{
+	IplImage* src;
+
+	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+
+
+	IplImage *image = cvCreateImage(cvSize(3072, 3072), src->depth, src->nChannels);
+
+
+	cvResize(src, image);
+
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	//reservamos espacio en la tg para nuestras imagenes
+	cudaMalloc((unsigned char**)&d_input, imgsize);
+	cudaMalloc((unsigned char**)&d_output, imgsize);
+
+
+	//copiamos el input al device
+	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
+
+	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
+	dim3 dimBlock(32, 32);
+	dim3 dimGrid(96, 96);
+
+	float milis;
+	CUDA_TIME_START();
+
+	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
+
+	CUDA_TIME_GET(milis);
+
+	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
+	CudaCheckError();
+
+
+	//obtener los datos de la gráfica
+	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
+	cudaFree(d_output);
+	cudaFree(d_input);
+	//mostrar imagen
+
+	return milis;
+
+}
+float cuda3072_4()
+{
+	IplImage* src;
+
+	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+
+
+	IplImage *image = cvCreateImage(cvSize(3072, 3072), src->depth, src->nChannels);
+
+
+	cvResize(src, image);
+
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	//reservamos espacio en la tg para nuestras imagenes
+	cudaMalloc((unsigned char**)&d_input, imgsize);
+	cudaMalloc((unsigned char**)&d_output, imgsize);
+
+
+	//copiamos el input al device
+	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
+
+	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
+	dim3 dimBlock(8, 32);
+	dim3 dimGrid(96, 96);
+
+	float milis;
+	CUDA_TIME_START();
+
+	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
+
+	CUDA_TIME_GET(milis);
+
+	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
+	CudaCheckError();
+
+
+	//obtener los datos de la gráfica
+	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
+	cudaFree(d_output);
+	cudaFree(d_input);
+	//mostrar imagen
+
+	return milis;
+
+}
+float cuda4096()
+{
+	IplImage* src;
+
+	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+
+
+	IplImage *image = cvCreateImage(cvSize(4096, 4096), src->depth, src->nChannels);
+
+
+	cvResize(src, image);
+
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	//reservamos espacio en la tg para nuestras imagenes
+	cudaMalloc((unsigned char**)&d_input, imgsize);
+	cudaMalloc((unsigned char**)&d_output, imgsize);
+
+
+	//copiamos el input al device
+	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
+
+	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
+	dim3 dimBlock(32, 32);
+	dim3 dimGrid(128, 128);
+
+	float milis;
+	CUDA_TIME_START();
+
+	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
+	CUDA_TIME_GET(milis);
+
+	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
+	CudaCheckError();
+
+
+	//obtener los datos de la gráfica
+	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
+	cudaFree(d_output);
+	cudaFree(d_input);
+	//mostrar imagen
+	return milis;
+
+}
+float cuda4096_4()
+{
+	IplImage* src;
+
+	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+
+
+	IplImage *image = cvCreateImage(cvSize(4096, 4096), src->depth, src->nChannels);
+
+
+	cvResize(src, image);
+
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	//reservamos espacio en la tg para nuestras imagenes
+	cudaMalloc((unsigned char**)&d_input, imgsize);
+	cudaMalloc((unsigned char**)&d_output, imgsize);
+
+
+	//copiamos el input al device
+	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
+
+	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
+	dim3 dimBlock(8, 32);
+	dim3 dimGrid(128, 128);
+
+	float milis;
+	CUDA_TIME_START();
+
+	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
+	CUDA_TIME_GET(milis);
+
+	CudaCheckError();
+
+
+	//obtener los datos de la gráfica
+	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
+	cudaFree(d_output);
+	cudaFree(d_input);
+	return milis;
 
 }
 
+void createVideoAscii()
+{
+
+	CvCapture* capture = cvCaptureFromAVI("E:\\Rewrite_t.mp4");
+	if (capture == NULL) printf("Capture null");
+	
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	//reservamos espacio en la tg para nuestras imagenes
+	cudaMalloc((unsigned char**)&d_input, 512*512);
+	cudaMalloc((unsigned char**)&d_output, 512*512);
+	while (1)
+	{
+		IplImage* frame = NULL;
+
+		frame = cvQueryFrame(capture);
+		if (frame == NULL)
+		{
+			int fafafa;
+			printf("frame null\n");
+			//scanf("%d", fafafa);
+			break;
+		}
+
+		//transformamos la imagen
+		IplImage* gray = cvCreateImage(cvGetSize(frame), IPL_DEPTH_8U, 1);
+		cvCvtColor(frame, gray, CV_RGB2GRAY);
+		IplImage *image = cvCreateImage(cvSize(512, 512), IPL_DEPTH_8U, 1); 
+		cvResize(gray, image);
+
+		IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+		IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+		unsigned char *output = (unsigned char*)h_image2->imageData;
+		unsigned char *input = (unsigned char*)image->imageData;
+	
+
+		//copiamos el input al device
+		cudaMemcpy(d_input, input, 512*512, cudaMemcpyHostToDevice);
+		//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
+		dim3 dimBlock(32, 32);//x = 8
+		dim3 dimGrid(16, 16);
+
+		float milis;
+		CUDA_TIME_START();
+		sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
+		CUDA_TIME_GET(milis);
+
+		CudaCheckError();
+		cudaMemcpy(output, d_output, 512*512, cudaMemcpyDeviceToHost);
+		CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 128, 32);
+	}
+	cudaFree(d_output);
+	cudaFree(d_input);
+
+}
 
 int main()
 {
-
-	cuda128();
-	cuda128_4();
-	cuda512();
-	cuda512_4();
-	cuda3072();
-	cuda3072_4();
-	cuda4096();
-	cuda4096_4();
-
+	
+	//createVideoAscii();
+	createVideoAscii();
+	/*printf("CPU_SOBEL: %f\n", serial());
+	printf("Time milis: %f\n",cuda128()	);
+	printf("Time milis: %f\n",cuda128_4()	);
+	printf("Time milis: %f\n",cuda512()	);
+	printf("Time milis: %f\n",cuda512_4()	);
+	printf("Time milis: %f\n",cuda3072()	);
+	printf("Time milis: %f\n",cuda3072_4());
+	printf("Time milis: %f\n",cuda4096()	);
+	printf("Time milis: %f\n",cuda4096_4());*/
+	//int f;
+	//std::cin >> f;
 	return 0;
 }
 
