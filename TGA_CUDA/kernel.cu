@@ -103,12 +103,12 @@ __global__ void sobelBlocks(unsigned char* imgray, unsigned char* out, int SIZE)
 	if (ty == blockDim.y-1) //ultima columna
 	{
 		sA[tx + 1][blockDim.y + 1] = imgray[(x + 1)*SIZE+y];
-		if(tx==31) sA[blockDim.x+1][blockDim.y+1] = imgray[(x + 1)*SIZE+ y+1];//cargar abajo derecha
+		if(tx==blockDim.x-1) sA[blockDim.x+1][blockDim.y+1] = imgray[(x + 1)*SIZE+ y+1];//cargar abajo derecha
 	}
 	if (tx == 0)// primera fila
 	{
 		sA[0][ty+1] = imgray[(x)*SIZE + y - 1];
-		if(ty==31) sA[0][blockDim.y+1] = imgray[(x+1)*SIZE+y -1];//cargar arriba derecha
+		if(ty== blockDim.y - 1) sA[0][blockDim.y+1] = imgray[(x+1)*SIZE+y -1];//cargar arriba derecha
 	}
 	if (tx == blockDim.x-1) //ultima fila
 	{
@@ -143,6 +143,106 @@ __global__ void sobelBlocks(unsigned char* imgray, unsigned char* out, int SIZE)
 	out[x * SIZE + y] = tot;
 
 }
+
+__global__ void sobelBlocks_4(unsigned char* imgray, unsigned char* out, int SIZE)
+{
+
+	int x = blockDim.x*blockIdx.x*4 + threadIdx.x*4;
+	int y = blockDim.y*blockIdx.y + threadIdx.y;
+	int tx = threadIdx.x*4;
+	int ty = threadIdx.y;
+	//printf("BlockX=%d", blockDim.x);
+	//printf("tx=%d, ty=%d, x=%d, y=%d \n", tx, ty, x, y);
+	__shared__ unsigned char sA[(bSize + 2)][(bSize + 2)];
+
+	sA[(ty + 1)][(tx + 1)] = imgray[y*SIZE + x    ];
+	sA[(ty + 1)][(tx + 2)] = imgray[y*SIZE + x + 1];
+	sA[(ty + 1)][(tx + 3)] = imgray[y*SIZE + x + 2];
+	sA[(ty + 1)][(tx + 4)] = imgray[y*SIZE + x + 3];
+	//cada thread carga 4
+	if (ty == 0) // primera fila
+	{
+		sA[0][tx + 1] = imgray[(y - 1)*SIZE + x];
+		sA[0][tx + 2] = imgray[(y - 1)*SIZE + x+1];
+		sA[0][tx + 3] = imgray[(y - 1)*SIZE + x+2];
+		sA[0][tx + 4] = imgray[(y - 1)*SIZE + x+3];
+	}
+	if (ty == blockDim.y - 1) //ultima fila
+	{
+		sA[blockDim.y + 1][tx + 1] = imgray[(y + 1)*SIZE + x];
+		sA[blockDim.y + 1][tx + 2] = imgray[(y + 1)*SIZE + x + 1];
+		sA[blockDim.y + 1][tx + 3] = imgray[(y + 1)*SIZE + x + 2];
+		sA[blockDim.y + 1][tx + 4] = imgray[(y + 1)*SIZE + x + 3];
+		
+	}
+	if (tx == 0)// primera columna
+	{
+		sA[ty + 1][0] = imgray[(y - 1)*SIZE + x];
+
+	}
+	if (threadIdx.x == blockDim.x - 1) //ultima columna
+	{
+		sA[ty+1][blockDim.x*4 + 1] = imgray[(y + 1)*SIZE + x+4];
+	}
+	sA[0][0] = sA[0][1];
+	sA[blockDim.y + 1][blockDim.y + 1] = sA[blockDim.y][blockDim.y];
+	sA[0][blockDim.y + 1] = sA[0][blockDim.y];
+	sA[blockDim.y + 1][0] = sA[blockDim.y][0];
+	__syncthreads();
+
+	int ntx = tx + 1;
+	int nty = ty + 1;
+	uchar4 rest;
+	int tot;
+
+	unsigned char pixel00 = sA[(nty - 1)][ntx - 1];
+	unsigned char pixel01 = sA[(nty - 1)][ntx];
+	unsigned char pixel02 = sA[(nty - 1)][ntx + 1];
+	unsigned char pixel10 = sA[nty][ntx - 1];
+	unsigned char pixel11 = sA[nty][ntx];
+	unsigned char pixel12 = sA[nty      ][ntx + 1];
+	unsigned char pixel20 = sA[(nty + 1)][ntx - 1];
+	unsigned char pixel21 = sA[(nty + 1)][ntx    ];
+	unsigned char pixel22 = sA[(nty + 1)][ntx + 1];
+
+
+	int vert = (pixel00 + 2 * pixel01 + pixel02) - (pixel20 + 2 * pixel21 + pixel22);
+	int hori = (pixel00 + 2 * pixel10 + pixel20) - (pixel02 + 2 * pixel12 + pixel22);
+	rest.x = ( (vert + hori) > 60) ? 255 : 0;
+
+	pixel00 = sA[(nty - 1)][ntx + 2];
+	pixel10 = sA[nty][ntx + 2];
+	pixel20 = sA[(nty + 1)][ntx + 2];
+
+	 vert = (pixel01 + 2 * pixel02 + pixel00) - (pixel21 + 2 * pixel22 + pixel20);
+	 hori = (pixel01 + 2 * pixel11 + pixel21) - (pixel00 + 2 * pixel10 + pixel20);
+	rest.y = ((vert + hori) > 60) ? 255 : 0;
+
+	pixel01 = sA[(nty - 1)][ntx + 3];
+	pixel11 = sA[nty][ntx + 3];
+	pixel21 = sA[(nty + 1)][ntx + 3];
+
+	 vert = (pixel02 + 2 * pixel00 + pixel01) - (pixel22 + 2 * pixel20 + pixel21);
+	 hori = (pixel02 + 2 * pixel12 + pixel22) - (pixel01 + 2 * pixel11 + pixel21);
+
+	rest.z = ((vert + hori) > 60) ? 255 : 0;
+
+	pixel02 = sA[(nty - 1)][ntx + 4];
+	pixel12 = sA[nty][ntx + 4];
+	pixel22 = sA[(nty + 1)][ntx + 4];
+	 vert = (pixel00 + 2 * pixel01 + pixel02) - (pixel20 + 2 * pixel21 + pixel22);
+	 hori = (pixel00 + 2 * pixel10 + pixel20) - (pixel02 + 2 * pixel12 + pixel22);
+
+	rest.w = ((vert + hori) > 60) ? 255 : 0;
+	__syncthreads();
+
+	out[y * SIZE + x] = rest.x;
+	out[y * SIZE + x+1] = rest.y;
+	out[y * SIZE + x+2] = rest.z;
+	out[y * SIZE + x+3] = rest.w;
+}
+
+
 
 __global__ void asciiBlocks(unsigned char* imgray, unsigned char* out, int SIZEX, int bSizex, int bSizey) {
 	
@@ -337,30 +437,32 @@ void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 	//printf("Cols:%d Rows:%d", cols, rows);
 	unsigned char* ascii = (unsigned char*) malloc(rows*cols);
 	volatile int eol = 0;
-
-	for (int x = 0; x < rows; x++ )
+	#pragma acc kernels
 	{
-		for (int y = 0; y < cols; y++)
+		for (int x = 0; x < rows; x++)
 		{
-
-			int sumt = 0;
-			int dval = 1;
-			for (int i = x*pixels_x; i < x*pixels_x + pixels_x; ++i)
+			for (int y = 0; y < cols; y++)
 			{
-				for (int j = y*pixels_y; j < y*pixels_y +  pixels_y; ++j)
+
+				int sumt = 0;
+				int dval = 1;
+				for (int i = x*pixels_x; i < x*pixels_x + pixels_x; ++i)
 				{
-					++dval;
-					sumt += imgray[i*SIZE + j];
+					for (int j = y*pixels_y; j < y*pixels_y + pixels_y; ++j)
+					{
+						++dval;
+						sumt += imgray[i*SIZE + j];
 
-					// printf("i:%d j:%d\n", i, j);
+						// printf("i:%d j:%d\n", i, j);
+					}
 				}
-			}
-		//	printf("Val:%f\n", sumt / dval);
-			if (dval == 0) dval = 1;
-			int media = sumt / dval;
+				//	printf("Val:%f\n", sumt / dval);
+				if (dval == 0) dval = 1;
+				int media = sumt / dval;
 
-			//printf("i:%d j:%d\n", x, y);
-			ascii[x*cols+y] = convertTable(media);
+				//printf("i:%d j:%d\n", x, y);
+				ascii[x*cols + y] = convertTable(media);
+			}
 		}
 	}
 
@@ -620,7 +722,7 @@ void cuda512()
 	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
 
 	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
-	dim3 dimBlock(8, 8);
+	dim3 dimBlock(32, 32);
 	dim3 dimGrid(16, 16);
 
 	float milis;
@@ -644,6 +746,61 @@ void cuda512()
 
 }
 
+
+
+void cuda512_4()
+{
+	IplImage* src;
+
+	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+
+
+	IplImage *image = cvCreateImage(cvSize(512, 512), src->depth, src->nChannels);
+
+
+	cvResize(src, image);
+
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+	IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	//reservamos espacio en la tg para nuestras imagenes
+	cudaMalloc((unsigned char**)&d_input, imgsize);
+	cudaMalloc((unsigned char**)&d_output, imgsize);
+
+
+	//copiamos el input al device
+	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
+
+	//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
+	dim3 dimBlock(8, 32);//x = 8
+	dim3 dimGrid(16, 16);
+
+	float milis;
+	CUDA_TIME_START();
+
+	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
+	CUDA_TIME_GET(milis);
+
+	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
+	CudaCheckError();
+
+
+	//obtener los datos de la gráfica
+	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
+	cudaFree(d_output);
+	cudaFree(d_input);
+	//mostrar imagen
+
+	cvShowImage("Image", h_image2);
+	cvWaitKey();
+
+}
 
 void cuda3072()
 {
@@ -764,7 +921,8 @@ int main()
 	//cudaASCII();
 	//mycuda();
 	//cuda128();
-	cuda4096();
+//	cuda4096();
+	cuda512_4();
 	return 0;
 }
 
