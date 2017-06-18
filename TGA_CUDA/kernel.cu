@@ -10,13 +10,18 @@
 #include <device_functions.h>
 #include <iostream>
 #include <string.h>
+#include <chrono>
 #ifndef __CUDACC__  
 #define __CUDACC__
 #endif
 
 const unsigned int bSize = 128;
-
 using namespace cv;
+using namespace std::chrono;
+typedef std::chrono::high_resolution_clock Time;
+typedef std::chrono::microseconds ms;
+typedef std::chrono::duration<float> fsec;
+
 
 cudaEvent_t cStart, cEnd, cStart2, cEnd2;
 #define CUDA_TIME_START() cudaEventCreate(&cStart); cudaEventCreate(&cEnd); cudaEventRecord(cStart,0);   cudaEventSynchronize(cStart);
@@ -244,57 +249,11 @@ __global__ void sobelBlocks_4(unsigned char* imgray, unsigned char* out, int SIZ
 	out[y * SIZE + x + 2] = rest.z;
 	out[y * SIZE + x + 3] = rest.w;
 }
-__global__ void asciiBlocks(unsigned char* imgray, unsigned char* out, int SIZEX, int bSizex, int bSizey) {
-
-	int x = blockDim.x*blockIdx.x + threadIdx.x;
-	int y = blockDim.y*blockIdx.y + threadIdx.y;
-	int tx = threadIdx.x;
-	int ty = threadIdx.y;
-	int sum = 0;
-	/*
-	for (int i = x*bSizex; i < x*bSizex+bSizex; i++)
-	for (int j = y*bSizey; j < y*bSizey+bSizey; j++)
-	sum = sum + imgray[j*SIZEX+i];
-
-	*/
-	__shared__ unsigned char sdata[8192];
-	int tid = ty*SIZEX + tx;
-
-	unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
-	sdata[tid] = imgray[y*SIZEX + x];
-
-	__syncthreads();
-
-	// contiguous range pattern
-	for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
-		if (threadIdx.x < offset) {
-			// add a partial sum upstream to our own
-			sdata[threadIdx.x] += sdata[threadIdx.x + offset];
-		}
-		// wait until all threads in the block have
-		// updated their partial sums
-		__syncthreads();
-	}
-
-	// thread 0 writes the final result
-	if (threadIdx.x == 0) {
-		//	per_block_results[blockIdx.x] = sdata[0];
-	}
 
 
-
-	//sdata[tid] = g_imgray[i];
-	__syncthreads();
-
-
-
-
-
-	__syncthreads();
-
-	sum = sum / (bSizex*bSizey);
-	unsigned char asciival = 'a';
-	unsigned char value = sum;
+__device__ unsigned char dconvertTable(unsigned char value)
+{
+	unsigned char asciival;
 
 	if (value >= 230)
 	{
@@ -333,24 +292,43 @@ __global__ void asciiBlocks(unsigned char* imgray, unsigned char* out, int SIZEX
 		asciival = ' ';
 	}
 
-	int outSizex = SIZEX / bSizex;
-	out[y*outSizex + x] = asciival;
-
+	return asciival;
 }
-
 __global__ void asciiMean(unsigned char* imgray, unsigned char* out, int SIZE, int bSizex, int bSizey) {
 
 	int resx = blockIdx.x; //columna
 	int resy = blockIdx.y; //fila
 	int x = blockDim.x*blockIdx.x + threadIdx.x;
 	int y = blockDim.y*blockIdx.y + threadIdx.y;
+
 	int tx = threadIdx.x;
 	int ty = threadIdx.y;
-	int sum = 0;
-	extern __shared__ int sdata[];//int para evitar overflow....
 
-	sdata[tx] = imgray[x*SIZE + y];
-	sdata[tx] = imgray[x*SIZE + y];
+
+	int bsize = blockDim.x*blockDim.y;
+	__shared__ int sdata[4 * 16];//int para evitar overflow....
+	int tid = ty *blockDim.x + tx;
+	int ind = y*SIZE + x;
+
+	sdata[tid] = imgray[ind];
+
+	__syncthreads();
+	int s;
+	for (s = 1; s < bsize; s *= 2) { //REDUCCION
+		int index = 2 * s * tid;
+		if (index < bsize)
+			sdata[index] += sdata[index + s];
+		__syncthreads();
+	}
+
+	if (tid == 0) {
+		int outputSize = SIZE / bSizex;
+		int numout = sdata[0] / bsize;
+		out[resy*outputSize + resx] = dconvertTable(numout);
+
+	}
+
+
 }
 
 struct kernel_global
@@ -423,48 +401,9 @@ unsigned char convertTable(unsigned char value)
 
 	return asciival;
 }
-void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
-{
 
 
-	/*cols = 128;
-	rows = 32;*/
 
-	int  pixels_y = SIZE / cols;
-	int pixels_x = SIZE / rows;
-	//printf("pixelx=%d, pixely=%d SIZE=%d ", pixels_x, pixels_y, SIZE);
-	//printf("Cols:%d Rows:%d", cols, rows);
-	unsigned char* ascii = (unsigned char*)malloc(rows*cols + 1);
-	volatile int eol = 0;
-
-	for (int x = 0; x < rows; x++)
-	{
-		for (int y = 0; y < cols; y++)
-		{
-
-			int sumt = 0;
-			int dval = 1;
-			for (int i = x*pixels_x; i < x*pixels_x + pixels_x; ++i)
-			{
-				for (int j = y*pixels_y; j < y*pixels_y + pixels_y; ++j)
-				{
-					++dval;
-					sumt += imgray[i*SIZE + j];
-				}
-			}
-
-			if (dval == 0) dval = 1;
-			int media = sumt / dval;
-			ascii[x*cols + y] = convertTable(media);
-		}
-	}
-
-	ascii[rows*cols] = 0;
-	printf((char*)ascii);
-	printf("\n\n");
-	free(ascii);
-
-}
 float serial()
 {
 	IplImage* image;
@@ -478,98 +417,6 @@ float serial()
 	TIME_START();
 	CPUSobel(input, output, cvGetSize(image).height);
 	return TIME_GET();
-}
-void ASCII()
-{
-	IplImage* image;
-	image = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
-	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-
-	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
-
-	unsigned char *output = (unsigned char*)h_image2->imageData;
-	unsigned char *input = (unsigned char*)image->imageData;
-
-	CPUSobel(input, output, cvGetSize(image).height);
-	CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 207, 61);
-
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
-}
-void cudaASCII() {
-
-	IplImage* image;
-	image = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
-	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
-
-	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
-
-	unsigned char *output = (unsigned char*)h_image2->imageData;
-	unsigned char *input = (unsigned char*)image->imageData;
-
-	CPUSobel(input, output, cvGetSize(image).height);
-
-
-	//CONSOLE_SCREEN_BUFFER_INFO csbi;
-	int a; std::cin >> a;
-
-	int cols = 128;
-	int rows = 32;
-
-	std::cout << cols << " g " << rows;
-	unsigned char *ascii = (unsigned char*)malloc(rows*cols);
-
-	int SIZE = cvGetSize(image).height;
-
-	int pixels_x = SIZE / rows; // character sizeX
-	int pixels_y = SIZE / cols; //character sizeY
-	int asciisize = rows*cols;
-	unsigned char *d_input;
-	unsigned char *d_output;
-
-	cudaMalloc((unsigned char**)&d_input, imgsize);
-	cudaMalloc((unsigned char**)&d_output, asciisize);
-
-	cudaMemcpy(d_input, input, imgsize, cudaMemcpyHostToDevice);
-
-	//thread x block GRID
-	int x, y;
-	x = y = 2;
-	while (x < rows)
-		x *= 2;
-	while (y < cols)
-		y *= 2;
-
-	//thread x block GRID
-	dim3 dimBlock(pixels_x, pixels_y);
-	dim3 dimGrid(rows, cols);
-
-	//thread x pixel GRID
-	//dim3 dimBlock(32, 32);
-
-	float milis;
-	CUDA_TIME_START();
-
-	asciiBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height, pixels_x, pixels_y);
-	CUDA_TIME_GET(k_global.kernel_time);
-
-	std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
-	CudaCheckError();
-
-
-	//obtener los datos de la gráfica
-
-	cudaMemcpy(ascii, d_output, asciisize, cudaMemcpyDeviceToHost);
-	cudaFree(d_output);
-	cudaFree(d_input);
-
-	//for (int i = 0; i < asciisize; i++)
-	//std::cout << std::hex << (int)ascii[i];
-	printf((char*)ascii);
-	printf("\n");
-	printf("hello");
-	cvShowImage("Image", h_image2);
-	cvWaitKey();
 }
 
 void mycuda()
@@ -627,9 +474,132 @@ void mycuda()
 
 }
 
-/*	namedWindow("Image", WINDOW_NORMAL);
-cvShowImage("Image", h_image2);
-cvWaitKey();*/
+void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows, bool print_output)
+{
+
+
+	/*cols = 128;
+	rows = 32;*/
+
+	int  pixels_y = SIZE / cols;
+	int pixels_x = SIZE / rows;
+	//printf("pixelx=%d, pixely=%d SIZE=%d ", pixels_x, pixels_y, SIZE);
+	//printf("Cols:%d Rows:%d", cols, rows);
+	unsigned char* ascii = (unsigned char*)malloc(rows*cols + 1);
+	volatile int eol = 0;
+
+	for (int x = 0; x < rows; x++)
+	{
+		for (int y = 0; y < cols; y++)
+		{
+
+			int sumt = 0;
+			int dval = 1;
+			for (int i = x*pixels_x; i < x*pixels_x + pixels_x; ++i)
+			{
+				for (int j = y*pixels_y; j < y*pixels_y + pixels_y; ++j)
+				{
+					++dval;
+					sumt += imgray[i*SIZE + j];
+				}
+			}
+
+			if (dval == 0) dval = 1;
+			int media = sumt / dval;
+			ascii[x*cols + y] = convertTable(media);
+		}
+	}
+
+	ascii[rows*cols] = 0;
+	if(print_output){
+		printf((char*)ascii);
+		printf("\n\n");
+	}
+	free(ascii);
+
+}
+
+struct kernel_global cudaAscii(unsigned char* sobel, int SIZE, int cols, int rows, bool print_output) {
+	//Sobel
+
+	int imgsize = SIZE*SIZE;
+
+	//Calculo de caracteres
+	CUDA_TIME_START2();
+
+	unsigned char *ascii = (unsigned char*)malloc(rows*cols + 1);
+
+
+	int pixels_x = SIZE / rows; // character sizeX
+	int pixels_y = SIZE / cols; //character sizeY
+
+	int asciisize = rows*cols;
+
+	unsigned char* d_input;
+	unsigned char* d_output;
+
+	cudaMalloc((unsigned char**)&d_input, imgsize);
+	cudaMalloc((unsigned char**)&d_output, asciisize);
+
+	cudaMemcpy(d_input, sobel, imgsize, cudaMemcpyHostToDevice);
+
+	//thread x block GRID
+
+	dim3 dimBlock(pixels_y, pixels_x);
+	dim3 dimGrid(cols, rows);
+
+	CUDA_TIME_START();
+	asciiMean << <dimGrid, dimBlock >> > (d_input, d_output, SIZE, pixels_y, pixels_x);
+	CUDA_TIME_GET(k_global.kernel_time);
+
+	CudaCheckError();
+	//obtener los datos de la gráfica
+
+	cudaMemcpy(ascii, d_output, asciisize, cudaMemcpyDeviceToHost);
+	cudaFree(d_output);
+	cudaFree(d_input);
+
+	ascii[rows*cols] = 0;
+	//output
+	if (print_output){
+		printf((char*)ascii);
+		printf("\n\n");
+	}
+
+	free(ascii);
+	CUDA_TIME_GET2(k_global.global_time);
+	return k_global;
+}
+
+float ASCII(bool type_exec, bool print_output, int size)
+{
+	IplImage* src;
+	src = cvLoadImage("cameraman.png", CV_LOAD_IMAGE_GRAYSCALE);
+	IplImage *image = cvCreateImage(cvSize(size, size), src->depth, src->nChannels);
+	cvResize(src, image);
+
+	IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+	int imgsize = cvGetSize(image).height* cvGetSize(image).width;
+	int height = size;
+	int width = size;
+
+	unsigned char *output = (unsigned char*)h_image2->imageData;
+	unsigned char *input = (unsigned char*)image->imageData;
+
+	CPUSobel(input, output, cvGetSize(image).height);
+
+	auto start = std::chrono::system_clock::now();
+	
+
+	if(type_exec) cudaAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, width/4, height/16,print_output);
+	else CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, width/4 , height/16,print_output);
+
+	auto end = std::chrono::system_clock::now();
+	auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+	float f = (float)elapsed.count();
+	return f/1000.0f;
+}
 
 float serial128()
 {
@@ -1398,7 +1368,8 @@ void createVideoAscii(char* arg)
 
 		CudaCheckError();
 		cudaMemcpy(output, d_output, 512 * 512, cudaMemcpyDeviceToHost);
-		CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 128, 32);
+		//CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 128, 32);
+		cudaAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 128, 32,true);
 	}
 	cudaFree(d_output);
 	cudaFree(d_input);
@@ -1456,7 +1427,8 @@ void createVideoAscii(char* arg, int row, int col)
 
 		CudaCheckError();
 		cudaMemcpy(output, d_output, 512 * 512, cudaMemcpyDeviceToHost);
-		CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, col, row);
+		//CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, col, row);
+		cudaAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, col, row,true);
 	}
 	cudaFree(d_output);
 	cudaFree(d_input);
@@ -1559,6 +1531,30 @@ void k4096()
 	
 
 }
+
+void ascii512() {
+	printf("Asciificacion secuencial. Image of 512*512\n");
+	float ms = ASCII(false,false,512); //primer false para version CPU
+	printf("Tiempo Serie: %f\n", ms);
+	printf("\n\n");
+	printf("Asciificacion en cuda. Image of 512*512");
+	ASCII(true,false,512); //primer true para version cuda
+	printStatistics(512, ms);
+
+}
+
+void ascii4096() {
+	printf("Asciificacion secuencial. Image of 4096*4096\n");
+	float ms = ASCII(false, false,4096); //primer false para version CPU
+	printf("Tiempo Serie: %f\n", ms);
+	printf("\n\n");
+	printf("Asciificacion en cuda. Image of 4096*4096");
+	ASCII(true, false, 4096); //primer true para version cuda
+	printStatistics(4096, ms);
+
+}
+
+
 int handleError(int status, const char* func_name,
 	const char* err_msg, const char* file_name,
 	int line, void* userdata)
@@ -1586,7 +1582,12 @@ int main(int argc, char **argv)
 		k512(); printf("\n");
 		k3072(); printf("\n");
 		k4096(); printf("\n");
-		
+
+		ascii512(); printf("\n");
+		ascii4096(); printf("\n");
+		int a;
+		std::cin >> a;
+
 	}
 
 	return 0;
