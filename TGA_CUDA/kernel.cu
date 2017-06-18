@@ -1571,7 +1571,7 @@ int main(int argc, char **argv)
 	cv::redirectError(handleError);
 	if (argc == 2)
 	{
-		createVideoAscii(argv[1]);
+		createVideoAscii(argv[1]); 
 	}
 	else if (argc == 4)
 	{
