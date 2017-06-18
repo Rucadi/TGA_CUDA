@@ -3,7 +3,7 @@
 #include "device_launch_parameters.h"
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
-#include "opencv2/imgproc/imgproc_c.h"
+#include <opencv2/imgproc/imgproc_c.h>
 #include <time.h>
 #include <iostream>
 #include <stdio.h>
@@ -26,7 +26,7 @@ cudaEvent_t cStart, cEnd, cStart2, cEnd2;
 #define CUDA_TIME_GET2(_ms) cudaEventRecord(cEnd2); cudaEventSynchronize(cEnd2); cudaEventElapsedTime(&_ms,cStart2, cEnd2); cudaEventDestroy(cEnd2); cudaEventDestroy(cStart2);
 clock_t tBegin;
 #define TIME_START() { tBegin = clock();}
-#define TIME_GET() ((float)(clock() - tBegin)/(CLOCKS_PER_SEC/1000));
+#define TIME_GET() ((float)(clock() - tBegin)/(CLOCKS_PER_SEC/1000.0f));
 
 #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
 #define pb(bte){printf("%d\n",(bte));}
@@ -427,8 +427,8 @@ void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 {
 
 
-	cols = 128;
-	rows = 32;
+	/*cols = 128;
+	rows = 32;*/
 
 	int  pixels_y = SIZE / cols;
 	int pixels_x = SIZE / rows;
@@ -1405,33 +1405,95 @@ void createVideoAscii(char* arg)
 
 }
 
-
-void printStatistics(int size)
+void createVideoAscii(char* arg, int row, int col)
 {
+
+	CvCapture* capture = cvCaptureFromAVI(arg);
+	if (capture == NULL) printf("Capture null");
+
+	unsigned char *d_input;
+	unsigned char *d_output;
+
+	//reservamos espacio en la tg para nuestras imagenes
+	cudaMalloc((unsigned char**)&d_input, 512 * 512);
+	cudaMalloc((unsigned char**)&d_output, 512 * 512);
+	while (1)
+	{
+		IplImage* frame = NULL;
+
+		frame = cvQueryFrame(capture);
+		if (frame == NULL)
+		{
+			int fafafa;
+			printf("frame null\n");
+			//scanf("%d", fafafa);
+			break;
+		}
+
+		//transformamos la imagen
+		IplImage* gray = cvCreateImage(cvGetSize(frame), IPL_DEPTH_8U, 1);
+		cvCvtColor(frame, gray, CV_RGB2GRAY);
+		IplImage *image = cvCreateImage(cvSize(512, 512), IPL_DEPTH_8U, 1);
+		cvResize(gray, image);
+
+		IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+		IplImage* d_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
+
+		unsigned char *output = (unsigned char*)h_image2->imageData;
+		unsigned char *input = (unsigned char*)image->imageData;
+
+
+		//copiamos el input al device
+		cudaMemcpy(d_input, input, 512 * 512, cudaMemcpyHostToDevice);
+		//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
+		dim3 dimBlock(32, 32);//x = 8
+		dim3 dimGrid(16, 16);
+
+		float milis;
+		CUDA_TIME_START();
+		sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
+		CUDA_TIME_GET(k_global.kernel_time);
+
+		CudaCheckError();
+		cudaMemcpy(output, d_output, 512 * 512, cudaMemcpyDeviceToHost);
+		CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, col, row);
+	}
+	cudaFree(d_output);
+	cudaFree(d_input);
+
+}
+
+
+void printStatistics(int size, float ms)
+{
+	printf("\n");
 	printf("Tiempo Global: %4.6f milseg\n", k_global.global_time);
 	printf("Tiempo Kernel: %4.6f milseg\n", k_global.kernel_time);
 	printf("Rendimiento Global: %4.2f GFLOPS\n", (2.0 * size*size) / (1000000.0 *  k_global.global_time));
 	printf("Rendimiento Kernel: %4.2f GFLOPS\n", (2.0 *  size*size) / (1000000.0 * k_global.kernel_time));
+	printf("SpeedUp: %f\n", ms / k_global.global_time);
+	printf("\n");
 }
 
 void k128()
 {
 
 	printf("Image of 128x128\n");
-	serial128();
+	float ms = serial128();
+	printf("Tiempo Serie: %f\n", ms);
 
 	printf("CUDA_o1\n");
-	cuda128();
-	printStatistics(128);
+	cuda128_s();
+	printStatistics(128,ms);
 
 	printf("CUDA_o2\n");
-	cuda128_s();
-	printStatistics(128);
+	cuda128();
+	printStatistics(128, ms);
 
 
 	printf("CUDA_o3\n");
 	cuda128_4();
-	printStatistics(128);
+	printStatistics(128, ms);
 
 
 }
@@ -1439,69 +1501,92 @@ void k128()
 void k512()
 {
 	printf("Image of 512*512\n");
+	float ms = serial512();
+	printf("Tiempo Serie: %f\n", ms);
 
 	printf("CUDA_o1\n");
-	cuda512();
-	printStatistics(512);
+	cuda512_s();
+	printStatistics(512, ms);
 
 	printf("CUDA_o2\n");
-	cuda512_s();
-	printStatistics(512);
+	cuda512();
+	printStatistics(512, ms);
 
 
 	printf("CUDA_o3\n");
 	cuda512_4();
-	printStatistics(512);
+	printStatistics(512, ms);
 }
 
 void k3072()
 {
 	printf("Image of 3072*3072\n");
+	float ms = serial3072();
+	printf("Tiempo Serie: %f\n", ms);
+
 	printf("CUDA_o1\n");
-	cuda3072();
-	printStatistics(3072);
+	cuda3072_s();
+	printStatistics(3072, ms);
 
 	printf("CUDA_o2\n");
-	cuda3072_s();
-	printStatistics(3072);
+	cuda3072();
+	printStatistics(3072, ms);
 
 
 	printf("CUDA_o3\n");
 	cuda3072_4();
-	printStatistics(3072);
+	printStatistics(3072, ms);
 }
 
 void k4096()
 {
-
 	printf("Image of 4096*4096\n");
+	float ms = serial4096();
+	printf("Tiempo Serie: %f\n", ms);
+
 	printf("CUDA_o1\n");
-	cuda4096();
-	printStatistics(4096);
+	cuda4096_s();
+	printStatistics(4096, ms);
 
 	printf("CUDA_o2\n");
-	cuda4096_s();
-	printStatistics(4096);
+	cuda4096();
+	printStatistics(4096, ms);
 
 
 	printf("CUDA_o3\n");
 	cuda4096_4();
-	printStatistics(4096);
-}
+	printStatistics(4096, ms);
+	
 
+}
+int handleError(int status, const char* func_name,
+	const char* err_msg, const char* file_name,
+	int line, void* userdata)
+{
+	//Do nothing -- will suppress console output
+	return 0;   //Return value is not used
+}
 int main(int argc, char **argv)
 {
-
+	cv::redirectError(handleError);
 	if (argc == 2)
 	{
-		createVideoAscii(argv[1]);
+		createVideoAscii(argv[1]); 
+	}
+	else if (argc == 4)
+	{
+		int row,col;
+		sscanf(argv[2], "%d", &row);
+		sscanf(argv[3], "%d", &col);
+		createVideoAscii(argv[1], col, row);
 	}
 	else
 	{
-		k128();
-		k512();
-		k3072();
-		k4096();
+		k128(); printf("\n");
+		k512(); printf("\n");
+		k3072(); printf("\n");
+		k4096(); printf("\n");
+		
 	}
 
 	return 0;
