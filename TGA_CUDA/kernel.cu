@@ -18,9 +18,12 @@ const unsigned int bSize = 128;
 
 using namespace cv;
 
-cudaEvent_t cStart, cEnd;
-#define CUDA_TIME_START() cudaEventCreate(&cStart); cudaEventCreate(&cEnd); cudaEventRecord(cStart);
-#define CUDA_TIME_GET(_ms) cudaEventRecord(cEnd); cudaEventSynchronize(cEnd); cudaEventElapsedTime(&_ms,cStart, cEnd);
+cudaEvent_t cStart, cEnd, cStart2, cEnd2;
+#define CUDA_TIME_START() cudaEventCreate(&cStart); cudaEventCreate(&cEnd); cudaEventRecord(cStart,0);   cudaEventSynchronize(cStart);
+#define CUDA_TIME_GET(_ms) cudaEventRecord(cEnd,0); cudaEventSynchronize(cEnd); cudaEventElapsedTime(&_ms,cStart, cEnd); cudaEventDestroy(cEnd); cudaEventDestroy(cStart);
+
+#define CUDA_TIME_START2() cudaEventCreate(&cStart2); cudaEventCreate(&cEnd2); cudaEventRecord(cStart2);  cudaEventSynchronize(cStart2);
+#define CUDA_TIME_GET2(_ms) cudaEventRecord(cEnd2); cudaEventSynchronize(cEnd2); cudaEventElapsedTime(&_ms,cStart2, cEnd2); cudaEventDestroy(cEnd2); cudaEventDestroy(cStart2);
 clock_t tBegin;
 #define TIME_START() { tBegin = clock();}
 #define TIME_GET() ((float)(clock() - tBegin)/(CLOCKS_PER_SEC/1000));
@@ -152,7 +155,7 @@ __global__ void sobelBlocks_4(unsigned char* imgray, unsigned char* out, int SIZ
 	int y = blockDim.y*blockIdx.y + threadIdx.y;
 	int tx = threadIdx.x * 4;
 	int ty = threadIdx.y;
-	
+
 	__shared__ unsigned char sA[(bSize + 2)][(bSize + 2)];
 
 	sA[(ty + 1)][(tx + 1)] = imgray[y*SIZE + x];
@@ -276,7 +279,8 @@ __global__ void asciiBlocks(unsigned char* imgray, unsigned char* out, int SIZEX
 	// thread 0 writes the final result
 	if (threadIdx.x == 0) {
 		//	per_block_results[blockIdx.x] = sdata[0];
-	}
+	}
+
 
 
 	//sdata[tid] = g_imgray[i];
@@ -349,11 +353,17 @@ __global__ void asciiMean(unsigned char* imgray, unsigned char* out, int SIZE, i
 	sdata[tx] = imgray[x*SIZE + y];
 }
 
+struct kernel_global
+{
+	float kernel_time;
+	float global_time;
+};
+struct kernel_global k_global;
 
 void CPUSobel(unsigned char* imgray, unsigned char* out, int SIZE)
 {
-	for (int x = 1; x<SIZE-1; ++x)
-		for (int y = 0; y < SIZE-1; ++y)
+	for (int x = 1; x<SIZE - 1; ++x)
+		for (int y = 0; y < SIZE - 1; ++y)
 		{
 			unsigned char pixel00 = imgray[(x - 1) * SIZE + y - 1];
 			unsigned char pixel01 = imgray[(x - 1) * SIZE + y];
@@ -424,35 +434,35 @@ void CPUAscii(unsigned char* imgray, int SIZE, int cols, int rows)
 	int pixels_x = SIZE / rows;
 	//printf("pixelx=%d, pixely=%d SIZE=%d ", pixels_x, pixels_y, SIZE);
 	//printf("Cols:%d Rows:%d", cols, rows);
-	unsigned char* ascii = (unsigned char*)malloc(rows*cols+1);
+	unsigned char* ascii = (unsigned char*)malloc(rows*cols + 1);
 	volatile int eol = 0;
 
-		for (int x = 0; x < rows; x++)
+	for (int x = 0; x < rows; x++)
+	{
+		for (int y = 0; y < cols; y++)
 		{
-			for (int y = 0; y < cols; y++)
-			{
 
-				int sumt = 0;
-				int dval = 1;
-				for (int i = x*pixels_x; i < x*pixels_x + pixels_x; ++i)
+			int sumt = 0;
+			int dval = 1;
+			for (int i = x*pixels_x; i < x*pixels_x + pixels_x; ++i)
+			{
+				for (int j = y*pixels_y; j < y*pixels_y + pixels_y; ++j)
 				{
-					for (int j = y*pixels_y; j < y*pixels_y + pixels_y; ++j)
-					{
-						++dval;
-						sumt += imgray[i*SIZE + j];
-					}
+					++dval;
+					sumt += imgray[i*SIZE + j];
 				}
-					
-				if (dval == 0) dval = 1;
-				int media = sumt / dval;
-				ascii[x*cols + y] = convertTable(media);
 			}
+
+			if (dval == 0) dval = 1;
+			int media = sumt / dval;
+			ascii[x*cols + y] = convertTable(media);
 		}
-	
-		ascii[rows*cols] = 0;
+	}
+
+	ascii[rows*cols] = 0;
 	printf((char*)ascii);
 	printf("\n\n");
-
+	free(ascii);
 
 }
 float serial()
@@ -541,7 +551,7 @@ void cudaASCII() {
 	CUDA_TIME_START();
 
 	asciiBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height, pixels_x, pixels_y);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -600,7 +610,7 @@ void mycuda()
 	CUDA_TIME_START();
 
 	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -618,8 +628,8 @@ void mycuda()
 }
 
 /*	namedWindow("Image", WINDOW_NORMAL);
-	cvShowImage("Image", h_image2);
-	cvWaitKey();*/
+cvShowImage("Image", h_image2);
+cvWaitKey();*/
 
 float serial128()
 {
@@ -693,8 +703,7 @@ float serial4096()
 	CPUSobel(input, output, cvGetSize(image).height);
 	return TIME_GET();
 }
-
-float cuda128()
+struct kernel_global cuda128()
 {
 	IplImage* src;
 
@@ -715,6 +724,7 @@ float cuda128()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -729,9 +739,8 @@ float cuda128()
 
 	float milis;
 	CUDA_TIME_START();
-
 	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -741,10 +750,10 @@ float cuda128()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
-	//mostrar imagen
-	return milis;
+	CUDA_TIME_GET2(k_global.global_time);
+	return k_global;
 }
-float cuda128_4()
+struct kernel_global cuda128_4()
 {
 	IplImage* src;
 
@@ -765,6 +774,7 @@ float cuda128_4()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -781,7 +791,7 @@ float cuda128_4()
 	CUDA_TIME_START();
 
 	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -791,11 +801,13 @@ float cuda128_4()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
-	return milis;
+
+	return k_global;
 
 }
-float cuda128_s()
+struct kernel_global cuda128_s()
 {
 	IplImage* src;
 
@@ -816,6 +828,7 @@ float cuda128_s()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -832,7 +845,7 @@ float cuda128_s()
 	CUDA_TIME_START();
 
 	sobel << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -842,10 +855,12 @@ float cuda128_s()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
-	return milis;
+
+	return k_global;
 }
-float cuda512()
+struct kernel_global cuda512()
 {
 	IplImage* src;
 
@@ -866,6 +881,7 @@ float cuda512()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -882,7 +898,7 @@ float cuda512()
 	CUDA_TIME_START();
 
 	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -892,13 +908,14 @@ float cuda512()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
 
-	return milis;
+	return k_global;
 
 
 }
-float cuda512_4()
+struct kernel_global cuda512_4()
 {
 	IplImage* src;
 
@@ -919,6 +936,7 @@ float cuda512_4()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -935,7 +953,7 @@ float cuda512_4()
 	CUDA_TIME_START();
 
 	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -945,15 +963,16 @@ float cuda512_4()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
 
 	//cvShowImage("Image", h_image2);
 	//CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 207, 61);
 	//cvWaitKey();
-	return milis;
+	return k_global;
 
 }
-float cuda512_s()
+struct kernel_global cuda512_s()
 {
 	IplImage* src;
 
@@ -974,6 +993,7 @@ float cuda512_s()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -990,7 +1010,7 @@ float cuda512_s()
 	CUDA_TIME_START();
 
 	sobel << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -1000,13 +1020,14 @@ float cuda512_s()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
 
-	return milis;
+	return k_global;
 
 
 }
-float cuda3072()
+struct kernel_global cuda3072()
 {
 	IplImage* src;
 
@@ -1027,6 +1048,7 @@ float cuda3072()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -1041,10 +1063,8 @@ float cuda3072()
 
 	float milis;
 	CUDA_TIME_START();
-
 	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -1054,12 +1074,13 @@ float cuda3072()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
 
-	return milis;
+	return k_global;
 
 }
-float cuda3072_4()
+struct kernel_global cuda3072_4()
 {
 	IplImage* src;
 
@@ -1080,6 +1101,7 @@ float cuda3072_4()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -1097,7 +1119,7 @@ float cuda3072_4()
 
 	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
 
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -1107,12 +1129,13 @@ float cuda3072_4()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
 
-	return milis;
+	return k_global;
 
 }
-float cuda3072_s()
+struct kernel_global cuda3072_s()
 {
 	IplImage* src;
 
@@ -1133,6 +1156,7 @@ float cuda3072_s()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -1150,7 +1174,7 @@ float cuda3072_s()
 
 	sobel << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
 
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -1160,12 +1184,13 @@ float cuda3072_s()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
 
-	return milis;
+	return k_global;
 
 }
-float cuda4096()
+struct kernel_global cuda4096()
 {
 	IplImage* src;
 
@@ -1186,6 +1211,7 @@ float cuda4096()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -1202,7 +1228,7 @@ float cuda4096()
 	CUDA_TIME_START();
 
 	sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -1212,11 +1238,12 @@ float cuda4096()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
-	return milis;
+	return k_global;
 
 }
-float cuda4096_4()
+struct kernel_global cuda4096_4()
 {
 	IplImage* src;
 
@@ -1237,6 +1264,7 @@ float cuda4096_4()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -1253,7 +1281,7 @@ float cuda4096_4()
 	CUDA_TIME_START();
 
 	sobelBlocks_4 << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	CudaCheckError();
 
@@ -1262,10 +1290,11 @@ float cuda4096_4()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
-	return milis;
+	CUDA_TIME_GET2(k_global.global_time);
+	return k_global;
 
 }
-float cuda4096_s()
+struct kernel_global cuda4096_s()
 {
 	IplImage* src;
 
@@ -1286,6 +1315,7 @@ float cuda4096_s()
 	unsigned char *d_input;
 	unsigned char *d_output;
 
+	CUDA_TIME_START2();
 	//reservamos espacio en la tg para nuestras imagenes
 	cudaMalloc((unsigned char**)&d_input, imgsize);
 	cudaMalloc((unsigned char**)&d_output, imgsize);
@@ -1302,7 +1332,7 @@ float cuda4096_s()
 	CUDA_TIME_START();
 
 	sobel << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-	CUDA_TIME_GET(milis);
+	CUDA_TIME_GET(k_global.kernel_time);
 
 	//std::cout << "Milisegundos ejecución CPU:" << milis << std::endl;
 	CudaCheckError();
@@ -1312,8 +1342,9 @@ float cuda4096_s()
 	cudaMemcpy(output, d_output, imgsize, cudaMemcpyDeviceToHost);
 	cudaFree(d_output);
 	cudaFree(d_input);
+	CUDA_TIME_GET2(k_global.global_time);
 	//mostrar imagen
-	return milis;
+	return k_global;
 
 }
 void createVideoAscii(char* arg)
@@ -1321,13 +1352,13 @@ void createVideoAscii(char* arg)
 
 	CvCapture* capture = cvCaptureFromAVI(arg);
 	if (capture == NULL) printf("Capture null");
-	
+
 	unsigned char *d_input;
 	unsigned char *d_output;
 
 	//reservamos espacio en la tg para nuestras imagenes
-	cudaMalloc((unsigned char**)&d_input, 512*512);
-	cudaMalloc((unsigned char**)&d_output, 512*512);
+	cudaMalloc((unsigned char**)&d_input, 512 * 512);
+	cudaMalloc((unsigned char**)&d_output, 512 * 512);
 	while (1)
 	{
 		IplImage* frame = NULL;
@@ -1344,7 +1375,7 @@ void createVideoAscii(char* arg)
 		//transformamos la imagen
 		IplImage* gray = cvCreateImage(cvGetSize(frame), IPL_DEPTH_8U, 1);
 		cvCvtColor(frame, gray, CV_RGB2GRAY);
-		IplImage *image = cvCreateImage(cvSize(512, 512), IPL_DEPTH_8U, 1); 
+		IplImage *image = cvCreateImage(cvSize(512, 512), IPL_DEPTH_8U, 1);
 		cvResize(gray, image);
 
 		IplImage* h_image2 = cvCreateImage(cvGetSize(image), IPL_DEPTH_8U, 1);
@@ -1352,10 +1383,10 @@ void createVideoAscii(char* arg)
 
 		unsigned char *output = (unsigned char*)h_image2->imageData;
 		unsigned char *input = (unsigned char*)image->imageData;
-	
+
 
 		//copiamos el input al device
-		cudaMemcpy(d_input, input, 512*512, cudaMemcpyHostToDevice);
+		cudaMemcpy(d_input, input, 512 * 512, cudaMemcpyHostToDevice);
 		//32*16 = 512 deberíamos soportar hasta 128x128,512x512,3072x3072,4096x4096
 		dim3 dimBlock(32, 32);//x = 8
 		dim3 dimGrid(16, 16);
@@ -1363,10 +1394,10 @@ void createVideoAscii(char* arg)
 		float milis;
 		CUDA_TIME_START();
 		sobelBlocks << <dimGrid, dimBlock >> > (d_input, d_output, cvGetSize(image).height);
-		CUDA_TIME_GET(milis);
+		CUDA_TIME_GET(k_global.kernel_time);
 
 		CudaCheckError();
-		cudaMemcpy(output, d_output, 512*512, cudaMemcpyDeviceToHost);
+		cudaMemcpy(output, d_output, 512 * 512, cudaMemcpyDeviceToHost);
 		CPUAscii((unsigned char*)h_image2->imageData, cvGetSize(image).height, 128, 32);
 	}
 	cudaFree(d_output);
@@ -1375,42 +1406,104 @@ void createVideoAscii(char* arg)
 }
 
 
+void printStatistics(int size)
+{
+	printf("Tiempo Global: %4.6f milseg\n", k_global.global_time);
+	printf("Tiempo Kernel: %4.6f milseg\n", k_global.kernel_time);
+	printf("Rendimiento Global: %4.2f GFLOPS\n", (2.0 * size*size) / (1000000.0 *  k_global.global_time));
+	printf("Rendimiento Kernel: %4.2f GFLOPS\n", (2.0 *  size*size) / (1000000.0 * k_global.kernel_time));
+}
+
+void k128()
+{
+
+	printf("Image of 128x128\n");
+	serial128();
+
+	printf("CUDA_o1\n");
+	cuda128();
+	printStatistics(128);
+
+	printf("CUDA_o2\n");
+	cuda128_s();
+	printStatistics(128);
+
+
+	printf("CUDA_o3\n");
+	cuda128_4();
+	printStatistics(128);
+
+
+}
+
+void k512()
+{
+	printf("Image of 512*512\n");
+
+	printf("CUDA_o1\n");
+	cuda512();
+	printStatistics(512);
+
+	printf("CUDA_o2\n");
+	cuda512_s();
+	printStatistics(512);
+
+
+	printf("CUDA_o3\n");
+	cuda512_4();
+	printStatistics(512);
+}
+
+void k3072()
+{
+	printf("Image of 3072*3072\n");
+	printf("CUDA_o1\n");
+	cuda3072();
+	printStatistics(3072);
+
+	printf("CUDA_o2\n");
+	cuda3072_s();
+	printStatistics(3072);
+
+
+	printf("CUDA_o3\n");
+	cuda3072_4();
+	printStatistics(3072);
+}
+
+void k4096()
+{
+
+	printf("Image of 4096*4096\n");
+	printf("CUDA_o1\n");
+	cuda4096();
+	printStatistics(4096);
+
+	printf("CUDA_o2\n");
+	cuda4096_s();
+	printStatistics(4096);
+
+
+	printf("CUDA_o3\n");
+	cuda4096_4();
+	printStatistics(4096);
+}
+
 int main(int argc, char **argv)
 {
-	
+
 	if (argc == 2)
 	{
 		createVideoAscii(argv[1]);
 	}
 	else
 	{
-		printf("128\n");
-		printf("Serial: %f\n",serial128());
-		printf("Cuda_o1: %f\n",cuda128_s());
-		printf("Cuda_o2: %f\n",cuda128()	);
-		printf("Cuda_o3: %f\n",cuda128_4()	);
-
-		printf("512\n");
-		printf("Serial: %f\n", serial512());
-		printf("Cuda_o1: %f\n", cuda512_s());
-		printf("Cuda_o2: %f\n", cuda512());
-		printf("Cuda_o3: %f\n",cuda512_4());
-
-		printf("3072\n");
-		printf("Serial: %f\n", serial3072());
-		printf("Cuda_o1: %f\n", cuda3072_s());
-		printf("Cuda_o2: %f\n", cuda3072());
-		printf("Cuda_o3: %f\n",cuda3072_4());
-
-		printf("4096\n");
-		printf("Serial: %f\n", serial4096());
-		printf("Cuda_o1: %f\n", cuda4096_s());
-		printf("Cuda_o2: %f\n", cuda4096());
-		printf("Cuda_o3: %f\n",cuda4096_4());
+		k128();
+		k512();
+		k3072();
+		k4096();
 	}
 
-	/*int f;
-	std::cin >> f;*/
 	return 0;
 }
 
